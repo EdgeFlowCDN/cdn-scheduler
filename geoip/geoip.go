@@ -1,8 +1,11 @@
 package geoip
 
 import (
+	"log"
 	"math"
 	"net"
+
+	"github.com/oschwald/maxminddb-golang"
 )
 
 // Location represents a geographic location.
@@ -19,7 +22,7 @@ type Locator interface {
 
 // StaticLocator uses a static map for IP lookups (for testing/development).
 type StaticLocator struct {
-	entries map[string]*Location
+	entries  map[string]*Location
 	fallback *Location
 }
 
@@ -28,9 +31,9 @@ func NewStaticLocator() *StaticLocator {
 	return &StaticLocator{
 		entries: map[string]*Location{
 			// Example entries for testing
-			"1.0.0.0":   {Lat: 39.9, Lon: 116.4, ISP: "telecom"},  // Beijing
-			"2.0.0.0":   {Lat: 31.2, Lon: 121.5, ISP: "unicom"},   // Shanghai
-			"3.0.0.0":   {Lat: 23.1, Lon: 113.3, ISP: "mobile"},   // Guangzhou
+			"1.0.0.0": {Lat: 39.9, Lon: 116.4, ISP: "telecom"}, // Beijing
+			"2.0.0.0": {Lat: 31.2, Lon: 121.5, ISP: "unicom"},  // Shanghai
+			"3.0.0.0": {Lat: 23.1, Lon: 113.3, ISP: "mobile"},  // Guangzhou
 		},
 		fallback: &Location{Lat: 39.9, Lon: 116.4, ISP: "unknown"},
 	}
@@ -48,18 +51,80 @@ func (s *StaticLocator) AddEntry(ip string, loc *Location) {
 	s.entries[ip] = loc
 }
 
-// MaxMindLocator uses MaxMind GeoLite2 database.
-// Requires the github.com/oschwald/maxminddb-golang package.
+// maxmindRecord represents the data structure stored in MaxMind .mmdb files.
+type maxmindRecord struct {
+	City struct {
+		Names map[string]string `maxminddb:"names"`
+	} `maxminddb:"city"`
+	Location struct {
+		Latitude  float64 `maxminddb:"latitude"`
+		Longitude float64 `maxminddb:"longitude"`
+	} `maxminddb:"location"`
+	Traits struct {
+		ISP          string `maxminddb:"isp"`
+		Organization string `maxminddb:"organization"`
+	} `maxminddb:"traits"`
+}
+
+// MaxMindLocator uses MaxMind GeoLite2/GeoIP2 database.
 type MaxMindLocator struct {
+	db       *maxminddb.Reader
 	fallback *Location
 }
 
 // NewMaxMindLocator creates a locator using a MaxMind .mmdb file.
-// Falls back to static locator if file is not available.
+// Falls back to StaticLocator if the file cannot be opened.
 func NewMaxMindLocator(dbPath string) Locator {
-	// For Phase 3, we use the static locator as default.
-	// MaxMind integration can be added when the .mmdb file is available.
-	return NewStaticLocator()
+	reader, err := maxminddb.Open(dbPath)
+	if err != nil {
+		log.Printf("warning: failed to open MaxMind database %s: %v, falling back to static locator", dbPath, err)
+		return NewStaticLocator()
+	}
+	log.Printf("loaded MaxMind GeoIP database: %s", dbPath)
+	return &MaxMindLocator{
+		db:       reader,
+		fallback: &Location{Lat: 39.9, Lon: 116.4, ISP: "unknown"},
+	}
+}
+
+// Lookup resolves an IP address to a geographic location using the MaxMind database.
+func (m *MaxMindLocator) Lookup(ipStr string) *Location {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return m.fallback
+	}
+
+	var record maxmindRecord
+	err := m.db.Lookup(ip, &record)
+	if err != nil {
+		return m.fallback
+	}
+
+	// If no location data found, return fallback
+	if record.Location.Latitude == 0 && record.Location.Longitude == 0 {
+		return m.fallback
+	}
+
+	isp := record.Traits.ISP
+	if isp == "" {
+		isp = record.Traits.Organization
+	}
+	if isp == "" {
+		isp = "unknown"
+	}
+
+	return &Location{
+		Lat: record.Location.Latitude,
+		Lon: record.Location.Longitude,
+		ISP: isp,
+	}
+}
+
+// Close releases the MaxMind database resources.
+func (m *MaxMindLocator) Close() {
+	if m.db != nil {
+		m.db.Close()
+	}
 }
 
 // Distance calculates the great-circle distance between two points in km.

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/EdgeFlowCDN/cdn-scheduler/config"
 	cdndns "github.com/EdgeFlowCDN/cdn-scheduler/dns"
@@ -32,6 +35,10 @@ func main() {
 	} else {
 		locator = geoip.NewStaticLocator()
 	}
+	// Close GeoIP database if it supports closing
+	if cl, ok := locator.(interface{ Close() }); ok {
+		defer cl.Close()
+	}
 
 	// Initialize health checker
 	hc := health.NewChecker(
@@ -44,7 +51,6 @@ func main() {
 		hc.RegisterNode(node.Name, node.IP, node.MaxBandwidth, node.MaxConnections, node.HealthEndpoint)
 	}
 	hc.Start()
-	defer hc.Stop()
 
 	// Initialize scheduler
 	sched := scheduler.New(
@@ -67,7 +73,7 @@ func main() {
 	// Start HTTP 302 redirect server
 	httpServer := cdndns.NewHTTPRedirectServer(sched, cfg.HTTP.Listen)
 	go func() {
-		if err := httpServer.ListenAndServe(); err != nil {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP redirect server failed: %v", err)
 		}
 	}()
@@ -75,8 +81,28 @@ func main() {
 	log.Printf("EdgeFlow Scheduler started (DNS: %s, HTTP: %s, nodes: %d)",
 		cfg.DNS.Listen, cfg.HTTP.Listen, len(cfg.Nodes))
 
+	// Wait for interrupt signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-	log.Println("shutting down")
+	sig := <-sigCh
+	log.Printf("received signal %v, shutting down gracefully...", sig)
+
+	// Graceful shutdown: stop health checker
+	hc.Stop()
+	log.Println("health checker stopped")
+
+	// Shutdown HTTP redirect server with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := httpServer.Shutdown(ctx); err != nil {
+		log.Printf("HTTP redirect server forced to shutdown: %v", err)
+	} else {
+		log.Println("HTTP redirect server stopped")
+	}
+
+	// Shutdown DNS server
+	dnsServer.Shutdown()
+	log.Println("DNS server stopped")
+
+	log.Println("EdgeFlow Scheduler shut down cleanly")
 }

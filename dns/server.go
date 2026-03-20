@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -15,10 +16,12 @@ import (
 
 // Server is a DNS server that responds with the best edge node IP.
 type Server struct {
-	scheduler *scheduler.Scheduler
-	domain    string
-	ttl       uint32
-	addr      string
+	scheduler  *scheduler.Scheduler
+	domain     string
+	ttl        uint32
+	addr       string
+	udpServer  *dns.Server
+	tcpServer  *dns.Server
 }
 
 // NewServer creates a new DNS scheduler server.
@@ -43,18 +46,19 @@ func (s *Server) ListenAndServe() error {
 
 	errCh := make(chan error, 2)
 
+	s.udpServer = &dns.Server{Addr: s.addr, Net: "udp", Handler: mux}
+	s.tcpServer = &dns.Server{Addr: s.addr, Net: "tcp", Handler: mux}
+
 	// UDP
 	go func() {
-		udpServer := &dns.Server{Addr: s.addr, Net: "udp", Handler: mux}
 		log.Printf("[dns] listening on %s (UDP)", s.addr)
-		errCh <- udpServer.ListenAndServe()
+		errCh <- s.udpServer.ListenAndServe()
 	}()
 
 	// TCP
 	go func() {
-		tcpServer := &dns.Server{Addr: s.addr, Net: "tcp", Handler: mux}
 		log.Printf("[dns] listening on %s (TCP)", s.addr)
-		errCh <- tcpServer.ListenAndServe()
+		errCh <- s.tcpServer.ListenAndServe()
 	}()
 
 	return <-errCh
@@ -128,10 +132,21 @@ func extractClientIP(w dns.ResponseWriter, r *dns.Msg) string {
 	return host
 }
 
+// Shutdown gracefully shuts down the DNS server.
+func (s *Server) Shutdown() {
+	if s.udpServer != nil {
+		s.udpServer.Shutdown()
+	}
+	if s.tcpServer != nil {
+		s.tcpServer.Shutdown()
+	}
+}
+
 // HTTPRedirectServer provides HTTP 302 scheduling.
 type HTTPRedirectServer struct {
 	scheduler *scheduler.Scheduler
 	addr      string
+	server    *http.Server
 }
 
 // NewHTTPRedirectServer creates an HTTP 302 redirect scheduler.
@@ -143,8 +158,17 @@ func NewHTTPRedirectServer(sched *scheduler.Scheduler, addr string) *HTTPRedirec
 func (s *HTTPRedirectServer) ListenAndServe() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRedirect)
+	s.server = &http.Server{Addr: s.addr, Handler: mux}
 	log.Printf("[http] redirect server listening on %s", s.addr)
-	return http.ListenAndServe(s.addr, mux)
+	return s.server.ListenAndServe()
+}
+
+// Shutdown gracefully shuts down the HTTP redirect server.
+func (s *HTTPRedirectServer) Shutdown(ctx context.Context) error {
+	if s.server != nil {
+		return s.server.Shutdown(ctx)
+	}
+	return nil
 }
 
 func (s *HTTPRedirectServer) handleRedirect(w http.ResponseWriter, r *http.Request) {
