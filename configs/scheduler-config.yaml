@@ -1,0 +1,52 @@
+dns:
+  listen: ":15353"
+  ttl: 60
+  domain: "edgeflow.dev"
+  top_n: 3
+
+http:
+  listen: ":8053"
+
+health_check:
+  interval: 10s
+  timeout: 3s
+  failure_threshold: 3
+  success_threshold: 2
+
+geoip:
+  database: ""
+
+load_balance:
+  overload_threshold: 0.85
+  reject_threshold: 0.95
+
+nodes:
+  - name: "edge-beijing"
+    ip: "10.0.1.1"
+    region: "beijing"
+    isp: "telecom"
+    lat: 39.9042
+    lon: 116.4074
+    max_bandwidth: 10000000000
+    max_connections: 100000
+    health_endpoint: "http://10.0.1.1:8080/health"
+
+  - name: "edge-shanghai"
+    ip: "10.0.2.1"
+    region: "shanghai"
+    isp: "unicom"
+    lat: 31.2304
+    lon: 121.4737
+    max_bandwidth: 10000000000
+    max_connections: 100000
+    health_endpoint: "http://10.0.2.1:8080/health"
+
+  - name: "edge-guangzhou"
+    ip: "10.0.3.1"
+    region: "guangzhou"
+    isp: "mobile"
+    lat: 23.1291
+    lon: 113.2644
+    max_bandwidth: 10000000000
+    max_connections: 100000
+    health_endpoint: "http://10.0.3.1:8080/health"
