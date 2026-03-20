@@ -1,0 +1,32 @@
+dns:
+  listen: ":15353"
+  ttl: 60
+  domain: "edgeflow.dev"
+  top_n: 3
+
+http:
+  listen: ":8053"
+
+health_check:
+  interval: 10s
+  timeout: 3s
+  failure_threshold: 3
+  success_threshold: 2
+
+geoip:
+  database: ""
+
+load_balance:
+  overload_threshold: 0.85
+  reject_threshold: 0.95
+
+nodes:
+  - name: "edge-docker"
+    ip: "cdn-edge"
+    region: "local"
+    isp: "local"
+    lat: 39.9
+    lon: 116.4
+    max_bandwidth: 10000000000
+    max_connections: 100000
+    health_endpoint: "http://cdn-edge:8080/health"
